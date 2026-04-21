@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "DQR Automation",
+  "version": "1.0.0",
+  "description": "Auto-fills every Data Quality Rating card in the EnviGuide Management Suite.",
+  "permissions": ["activeTab"],
+  "host_permissions": [
+    "https://enviguide.nextechltd.in/*",
+    "https://*.nextechltd.in/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DQR Automation"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://enviguide.nextechltd.in/*",
+        "https://*.nextechltd.in/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}

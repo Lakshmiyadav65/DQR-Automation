@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DQR Automation</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="title">DQR Automation</div>
+    <div class="subtitle">EnviGuide Management Suite</div>
+  </header>
+
+  <section id="status-section">
+    <div id="status" class="status idle">Ready.</div>
+  </section>
+
+  <section id="options">
+    <label>
+      <input type="checkbox" id="dryRun" />
+      <span>Dry-run (log actions, don't change anything)</span>
+    </label>
+    <label>
+      <input type="checkbox" id="skipSave" />
+      <span>Skip "Save Progress" at the end</span>
+    </label>
+    <label class="inline">
+      <span>Only card (optional):</span>
+      <input type="text" id="onlyCard" placeholder="e.g. PCF Methodology" />
+    </label>
+  </section>
+
+  <section id="buttons">
+    <button id="start" class="primary">START</button>
+    <button id="stop" disabled>STOP</button>
+  </section>
+
+  <footer>
+    <div class="hint">
+      Open the Data Quality Rating page first, then click START. A progress overlay will appear on the page.
+    </div>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

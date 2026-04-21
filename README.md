@@ -1,6 +1,25 @@
 # DQR Automation
 
-Playwright (TypeScript) automation that completes every card in the **Data Quality Rating** flow of the EnviGuide Management Suite and then clicks **Save Progress**.
+Two ways to auto-complete every card in the **Data Quality Rating** flow of the EnviGuide Management Suite, then click **Save Progress**.
+
+## Which one should I use?
+
+| | Chrome extension ([extension/](extension/)) | Playwright script ([src/](src/)) |
+|---|---|---|
+| **Best for** | Daily human-driven use. Works with MFA/SSO because it uses your real logged-in session. | CI, headless runs, scripted testing. |
+| **Setup** | `chrome://extensions` → Load unpacked → done | `npm install`, `npx playwright install`, `.env` |
+| **Run** | Click the extension icon → START | `npm run dqr:manual` / `npm run dqr` |
+| **MFA** | Handled — you log in yourself | Manual-login mode only (`--manual`) |
+
+**If you have MFA and you're running this interactively, use the extension.**
+
+See [extension/README.md](extension/README.md) for the extension instructions.
+
+---
+
+## The Playwright script
+
+Playwright (TypeScript) automation that completes every card in the **Data Quality Rating** flow and then clicks **Save Progress**.
 
 The automation has **no knowledge of the app's source code** — it works purely from the rendered DOM, using resilient selectors (role → label → text → testid → CSS) with fallback chains. When the UI changes, selectors can be updated in one place: [src/selectors.ts](src/selectors.ts).
 
