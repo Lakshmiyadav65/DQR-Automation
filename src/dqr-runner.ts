@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import * as readline from 'node:readline';
 import { log } from './logger.js';
 import { fillPanel, type FillReport } from './panel-filler.js';
 import {
@@ -135,81 +136,128 @@ export async function runDqr(page: Page, opts: RunOptions): Promise<RunSummary> 
 export async function waitForUserStart(page: Page, timeoutMs = 30 * 60_000): Promise<Page> {
   const context = page.context();
 
-  log.banner('Ready — click the big GREEN "START AUTOMATION" button in the browser');
-  log.info('  1. Log in and navigate to Data Quality Rating yourself (browser is yours)');
-  log.info('  2. When you see all the DQR cards on screen, click the green button');
-  log.info('     (it floats at the bottom-right corner)');
-  log.info('  3. Automation clicks each card, fills every dropdown, closes, and saves');
-  log.info('  (Ctrl+C in this terminal to abort)');
+  log.banner('READY — two ways to start automation:');
+  log.info('  [A] Press ENTER in THIS TERMINAL when you are on the DQR page');
+  log.info('  [B] OR click the big green "START AUTOMATION" banner in the browser');
+  log.info('');
+  log.info('Sign in (incl. MFA), click "Data Quality Rating" in the sidebar,');
+  log.info('then use EITHER [A] or [B] above.   (Ctrl+C here to abort.)');
 
-  let clickedPage: Page | null = null;
+  let resolvedPage: Page | null = null;
+
+  // Wire up the browser-side binding the button calls on click.
   try {
     await context.exposeBinding('__dqrStart', (source) => {
-      clickedPage = source.page;
+      if (!resolvedPage) {
+        resolvedPage = source.page;
+        log.ok('Received click from the browser START banner.');
+      }
     });
+    log.debug('Browser binding __dqrStart installed.');
   } catch (e) {
-    // Binding already exists — fine, leftover from an earlier call.
-    log.debug(`exposeBinding: ${(e as Error).message}`);
+    log.warn(`Could not install browser binding: ${(e as Error).message}. The terminal Enter key will still work.`);
   }
 
+  // Terminal Enter key trigger (alternative to the browser button).
+  const rl = readline.createInterface({ input: process.stdin });
+  let enterPressed = false;
+  rl.on('line', () => {
+    if (enterPressed) return;
+    enterPressed = true;
+    // Pick the most recently-visited non-blank tab.
+    const pages = context.pages().filter((p) => !p.isClosed() && p.url() !== 'about:blank');
+    const chosen = pages[pages.length - 1] ?? context.pages()[0];
+    if (chosen && !resolvedPage) {
+      resolvedPage = chosen;
+      log.ok(`Received ENTER from terminal — will use tab: ${chosen.url()}`);
+    }
+  });
+
   const deadline = Date.now() + timeoutMs;
-  while (!clickedPage && Date.now() < deadline) {
+  let installCount = 0;
+  while (!resolvedPage && Date.now() < deadline) {
     const pages = context.pages().filter((p) => !p.isClosed());
     if (pages.length === 0) {
+      rl.close();
       throw new Error('All browser windows closed before the START button was clicked.');
     }
     for (const p of pages) {
-      await installStartButton(p).catch(() => {});
+      const installed = await installStartButton(p).catch(() => false);
+      if (installed) {
+        installCount++;
+        if (installCount <= 3 || installCount % 20 === 0) {
+          log.info(`Injected START banner on tab: ${p.url()}`);
+        }
+      }
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 500));
   }
 
-  if (!clickedPage) {
+  rl.close();
+
+  if (!resolvedPage) {
     throw new Error(
-      `Timed out after ${Math.round(timeoutMs / 60_000)}min waiting for the START button.`,
+      `Timed out after ${Math.round(timeoutMs / 60_000)}min waiting for you to start.`,
     );
   }
 
-  const chosen: Page = clickedPage;
+  const chosen: Page = resolvedPage;
   await chosen.bringToFront().catch(() => {});
-  await chosen.evaluate(() => document.getElementById('__dqr_start_btn')?.remove()).catch(() => {});
-  log.ok(`START clicked on ${chosen.url()} — running automation.`);
+  await chosen
+    .evaluate(() => {
+      const el = document.getElementById('__dqr_start_btn');
+      if (el) el.remove();
+      const observer = (window as unknown as Record<string, unknown>)['__dqrBtnObserver'] as
+        | MutationObserver
+        | undefined;
+      observer?.disconnect();
+    })
+    .catch(() => {});
+  log.ok(`Starting automation on ${chosen.url()}`);
   return chosen;
 }
 
 /**
- * Idempotently inject the floating START button into a page. If the button
- * is already present (same element id), this is a no-op.
+ * Idempotently inject a full-width START banner at the top of the page and
+ * defend it with a MutationObserver so React re-renders cannot wipe it.
+ * Returns true if a new banner was installed this call (for logging).
  */
-async function installStartButton(page: Page): Promise<void> {
-  if (page.isClosed()) return;
-  await page.evaluate(() => {
-    if (document.getElementById('__dqr_start_btn')) return;
-    if (!document.body) return;
+async function installStartButton(page: Page): Promise<boolean> {
+  if (page.isClosed()) return false;
+  return await page.evaluate(() => {
+    if (document.getElementById('__dqr_start_btn')) return false;
+    const root = document.documentElement;
+    if (!root) return false;
 
     const btn = document.createElement('button');
     btn.id = '__dqr_start_btn';
     btn.type = 'button';
-    btn.textContent = 'START AUTOMATION';
+    btn.textContent = 'CLICK HERE OR PRESS ENTER IN TERMINAL TO START AUTOMATION';
 
     const base = '#16a34a';
     const hover = '#15803d';
     Object.assign(btn.style, {
       position: 'fixed',
-      bottom: '24px',
-      right: '24px',
+      top: '0',
+      left: '0',
+      width: '100vw',
+      height: '56px',
       zIndex: '2147483647',
-      padding: '18px 32px',
       background: base,
       color: '#ffffff',
       fontSize: '18px',
-      fontWeight: '700',
-      letterSpacing: '0.05em',
-      border: '3px solid #ffffff',
-      borderRadius: '12px',
+      fontWeight: '800',
+      letterSpacing: '0.08em',
+      border: 'none',
+      borderBottom: '3px solid #ffffff',
       cursor: 'pointer',
-      boxShadow: '0 10px 32px rgba(22, 163, 74, 0.55), 0 0 0 4px rgba(22, 163, 74, 0.25)',
+      boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
       fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      textAlign: 'center',
+      padding: '0 16px',
     });
     btn.addEventListener('mouseenter', () => {
       btn.style.background = hover;
@@ -218,7 +266,7 @@ async function installStartButton(page: Page): Promise<void> {
       btn.style.background = base;
     });
     btn.addEventListener('click', () => {
-      btn.textContent = 'STARTING...';
+      btn.textContent = 'STARTING AUTOMATION...';
       btn.style.background = '#6b7280';
       btn.style.cursor = 'default';
       (btn as HTMLButtonElement).disabled = true;
@@ -226,7 +274,22 @@ async function installStartButton(page: Page): Promise<void> {
       if (typeof fn === 'function') (fn as () => void)();
     });
 
-    document.body.appendChild(btn);
+    // Attach to <html> rather than <body> so SPA body replacement can't orphan it.
+    root.appendChild(btn);
+
+    // Guard: if the app removes our button, re-attach within the same tick.
+    const w = window as unknown as Record<string, unknown>;
+    const prev = w['__dqrBtnObserver'] as MutationObserver | undefined;
+    prev?.disconnect();
+    const observer = new MutationObserver(() => {
+      if (!document.getElementById('__dqr_start_btn') && document.documentElement) {
+        document.documentElement.appendChild(btn);
+      }
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    w['__dqrBtnObserver'] = observer;
+
+    return true;
   });
 }
 
