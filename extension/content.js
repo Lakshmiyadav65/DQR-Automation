@@ -244,47 +244,85 @@
   }
 
   // ─── Card discovery ─────────────────────────────────────────────────
+  function normalizeText(s) {
+    return (s || '').replace(/[\s ]+/g, ' ').trim();
+  }
+
   function findCards() {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const matches = [];
-    let node;
-    while ((node = walker.nextNode())) {
-      if (/\d+\/5\s*DQIs/i.test(node.nodeValue || '')) matches.push(node);
+    // Find the SMALLEST elements whose flattened text contains "N/5 DQIs".
+    // We scan element.textContent (not individual text nodes) so we don't
+    // care if "0/5" and "DQIs" are split into two sibling <span>s.
+    const all = document.body ? document.body.querySelectorAll('*') : [];
+    const leaves = [];
+    for (const el of all) {
+      const text = normalizeText(el.textContent);
+      if (!/\d+\/5\s*DQIs/i.test(text)) continue;
+      // Keep only leaves — skip ancestors whose children also match, so we
+      // don't collect the entire DQR page as one giant "card".
+      let hasMatchingChild = false;
+      for (const child of el.children) {
+        if (/\d+\/5\s*DQIs/i.test(normalizeText(child.textContent))) {
+          hasMatchingChild = true;
+          break;
+        }
+      }
+      if (!hasMatchingChild) leaves.push(el);
     }
 
+    console.log(`[DQR] ${leaves.length} leaf element(s) contain "N/5 DQIs"`);
+
     const cards = [];
-    const seen = new Set();
-    for (const textNode of matches) {
-      let el = textNode.parentElement;
+    const seen = new WeakSet();
+
+    for (const leaf of leaves) {
+      // Walk UP from the counter leaf to the card container. The card is
+      // the nearest ancestor that still contains the counter, has a heading
+      // inside, and is either clickable or contains the status badge.
+      let el = leaf;
       let chosen = null;
-      while (el && el !== document.body) {
-        const content = el.textContent || '';
-        if (
-          /\d+\/5\s*DQIs/i.test(content) &&
-          /(Pending|Completed|In Progress)/i.test(content)
-        ) {
-          const s = getComputedStyle(el);
-          if (
-            s.cursor === 'pointer' ||
-            el.onclick ||
-            (el.getAttribute && el.getAttribute('role') === 'button') ||
-            el.tagName === 'BUTTON' ||
-            (typeof el.tabIndex === 'number' && el.tabIndex >= 0)
-          ) {
-            chosen = el;
-            break;
-          }
-          // remember the smallest status-bearing container as fallback
-          if (!chosen) chosen = el;
+
+      for (let depth = 0; depth < 12; depth++) {
+        const parent = el.parentElement;
+        if (!parent || parent === document.body) break;
+        el = parent;
+        const text = normalizeText(el.textContent);
+        if (!/\d+\/5\s*DQIs/i.test(text)) break; // walked past the card
+
+        const s = getComputedStyle(el);
+        const isClickable =
+          s.cursor === 'pointer' ||
+          !!el.onclick ||
+          el.getAttribute('role') === 'button' ||
+          el.tagName === 'BUTTON' ||
+          (typeof el.tabIndex === 'number' && el.tabIndex >= 0);
+
+        const hasBadge = /(Pending|Completed|In Progress)/i.test(text);
+        const hasHeading = !!el.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
+
+        if (isClickable) {
+          chosen = el;
+          break; // strongest signal — stop climbing
         }
-        el = el.parentElement;
+        if (hasBadge && hasHeading) {
+          chosen = el; // promising candidate — keep climbing in case there's a clickable wrapper
+        }
       }
-      if (!chosen || seen.has(chosen)) continue;
+
+      if (!chosen) {
+        // No clickable ancestor found — fall back to the leaf's 3rd-level parent.
+        chosen = leaf.parentElement?.parentElement?.parentElement ?? leaf;
+      }
+      if (seen.has(chosen)) continue;
       seen.add(chosen);
+
       const title = extractCardTitle(chosen);
       if (!title) continue;
       cards.push({ element: chosen, title });
     }
+
+    console.log(
+      `[DQR] Identified ${cards.length} card(s): ${cards.map((c) => c.title).join(' | ')}`,
+    );
     return cards;
   }
 
@@ -317,14 +355,29 @@
   }
 
   async function scrollToLoadAll() {
-    const countCounters = () =>
-      Array.from(document.querySelectorAll('*')).filter((el) =>
-        /\d+\/5\s*DQIs/.test(el.textContent || ''),
-      ).length;
+    // Count distinct card leaves (same logic as findCards) so we can tell
+    // when the virtualized list has no more cards to reveal.
+    const countLeaves = () => {
+      let n = 0;
+      for (const el of document.body ? document.body.querySelectorAll('*') : []) {
+        const t = normalizeText(el.textContent);
+        if (!/\d+\/5\s*DQIs/i.test(t)) continue;
+        let hasMatchingChild = false;
+        for (const c of el.children) {
+          if (/\d+\/5\s*DQIs/i.test(normalizeText(c.textContent))) {
+            hasMatchingChild = true;
+            break;
+          }
+        }
+        if (!hasMatchingChild) n++;
+      }
+      return n;
+    };
+
     let last = -1;
     for (let i = 0; i < 30; i++) {
       if (cancelRequested) return;
-      const c = countCounters();
+      const c = countLeaves();
       if (c === last && c > 0) break;
       last = c;
       document.querySelectorAll('*').forEach((el) => {
@@ -339,6 +392,7 @@
       window.scrollTo(0, document.body.scrollHeight);
       await sleep(280);
     }
+    console.log(`[DQR] scrollToLoadAll finished with ${last} visible counters`);
   }
 
   // ─── Panel open/close ───────────────────────────────────────────────
@@ -658,7 +712,7 @@
   // ─── Verification + main runner ─────────────────────────────────────
   function cardLooksComplete(cardEl) {
     if (!cardEl || !document.documentElement.contains(cardEl)) return true; // treat re-render as OK
-    const text = cardEl.textContent || '';
+    const text = normalizeText(cardEl.textContent);
     if (/5\/5\s*DQIs/i.test(text)) return true;
     if (!/Pending/i.test(text)) return true;
     return false;
