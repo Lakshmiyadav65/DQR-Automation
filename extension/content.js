@@ -427,25 +427,85 @@
     return panel;
   }
 
+  function findCloseButton(panel) {
+    // 1. ARIA-labelled close (most reliable when present).
+    const labelled =
+      panel.querySelector('[aria-label*="close" i]') ||
+      panel.querySelector('button[title*="close" i]');
+    if (labelled && isVisible(labelled)) return labelled;
+
+    const buttons = Array.from(panel.querySelectorAll('button')).filter(isVisible);
+    if (buttons.length === 0) return null;
+
+    // 2. Obvious X/× text.
+    const textX = buttons.find((b) => {
+      const t = (b.textContent || '').trim();
+      return t === '×' || t === 'X' || t === '✕' || /^close$/i.test(t);
+    });
+    if (textX) return textX;
+
+    // 3. Geometric heuristic: the button closest to the panel's top-right
+    //    corner, within the panel's first 80px of vertical space. Slide-in
+    //    dialogs always place the close X there.
+    const panelRect = panel.getBoundingClientRect();
+    const topRight = { x: panelRect.right, y: panelRect.top };
+    const header = buttons.filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.top - panelRect.top < 80;
+    });
+    const pool = header.length ? header : buttons;
+    let best = null;
+    let bestDist = Infinity;
+    for (const b of pool) {
+      const r = b.getBoundingClientRect();
+      const cx = (r.left + r.right) / 2;
+      const cy = (r.top + r.bottom) / 2;
+      const dist = Math.hypot(cx - topRight.x, cy - topRight.y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = b;
+      }
+    }
+    return best;
+  }
+
+  function getScrollableInside(container) {
+    // Deepest scrollable element inside `container`, else `container` if it
+    // scrolls itself, else null. Used to trigger lazy renders.
+    let best = null;
+    for (const el of container.querySelectorAll('*')) {
+      const s = getComputedStyle(el);
+      if (
+        (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
+        el.scrollHeight > el.clientHeight + 4
+      ) {
+        best = el;
+      }
+    }
+    if (best) return best;
+    const cs = getComputedStyle(container);
+    if (
+      (cs.overflowY === 'auto' || cs.overflowY === 'scroll') &&
+      container.scrollHeight > container.clientHeight + 4
+    ) {
+      return container;
+    }
+    return null;
+  }
+
+  async function sweepPanelScroll(panel) {
+    const sc = getScrollableInside(panel);
+    if (!sc) return;
+    sc.scrollTop = sc.scrollHeight;
+    await sleep(180);
+    sc.scrollTop = 0;
+    await sleep(120);
+  }
+
   async function closePanel(panel) {
     if (!panel || !document.documentElement.contains(panel)) return;
 
-    let closeBtn =
-      panel.querySelector('[aria-label*="close" i]') ||
-      panel.querySelector('button[title*="close" i]');
-
-    if (!closeBtn) {
-      // Find a header button with an X or an icon-only button.
-      const candidates = Array.from(panel.querySelectorAll('button')).filter(isVisible);
-      closeBtn =
-        candidates.find((b) => {
-          const t = (b.textContent || '').trim();
-          return t === '' || t === '×' || t === 'X' || t === '✕' || /^close$/i.test(t);
-        }) ||
-        candidates.find((b) => b.querySelector('svg')) ||
-        candidates[candidates.length - 1];
-    }
-
+    const closeBtn = findCloseButton(panel);
     if (closeBtn) {
       try { closeBtn.click(); } catch {}
     } else {
@@ -754,14 +814,43 @@
         try {
           const panel = await openCardPanel(card);
           if (!panel) throw new Error('Panel did not open');
+          await sleep(350);
+
+          // Multi-pass: cascading selects (e.g. Level-2 Classification)
+          // appear only AFTER their Level-1 parent is chosen. Keep filling
+          // (and scrolling the panel between passes to trigger lazy renders)
+          // until a pass fills nothing new.
+          let totalFilled = 0;
+          for (let pass = 0; pass < 8; pass++) {
+            if (cancelRequested) break;
+            await sweepPanelScroll(panel);
+            const filledThisPass = await fillPanel(panel, options);
+            console.log(
+              `[DQR] ${card.title} — pass ${pass + 1}: filled ${filledThisPass} new field(s)`,
+            );
+            totalFilled += filledThisPass;
+            if (filledThisPass === 0) break;
+            await sleep(450); // allow conditional fields to render
+          }
+
+          // Final sweep to bottom so anything that still depends on scroll
+          // position gets a fair chance.
+          await sweepPanelScroll(panel);
+          const finalPass = await fillPanel(panel, options);
+          if (finalPass > 0) {
+            totalFilled += finalPass;
+            console.log(`[DQR] ${card.title} — final sweep: filled ${finalPass} more`);
+          }
+
           await sleep(200);
-          const filledCount = await fillPanel(panel, options);
-          await sleep(150);
           await closePanel(panel);
-          await sleep(150);
+          await sleep(250);
+
           if (options.dryRun) { ok = true; break; }
-          if (cardLooksComplete(card.element) || filledCount > 0) { ok = true; break; }
-          lastErr = new Error('Card still shows Pending after filling');
+          // Accept success if the card's DQI counter advanced OR we filled at
+          // least some fields — otherwise retry (app may have been mid-render).
+          if (cardLooksComplete(card.element) || totalFilled >= 1) { ok = true; break; }
+          lastErr = new Error(`No fields were fillable on attempt ${attempt}`);
         } catch (e) {
           lastErr = e;
         }
