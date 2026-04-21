@@ -1,0 +1,25 @@
+{
+  "name": "dqr-automation",
+  "version": "1.0.0",
+  "description": "Playwright automation for the EnviGuide Data Quality Rating flow.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dqr": "tsx src/index.ts",
+    "dqr:headed": "tsx src/index.ts --headed",
+    "dqr:dry": "tsx src/index.ts --headed --dry-run",
+    "typecheck": "tsc --noEmit",
+    "codegen": "playwright codegen"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.49.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}
