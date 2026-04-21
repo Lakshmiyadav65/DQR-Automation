@@ -36,8 +36,20 @@ DQR_PASS=your-password
 
 ## Run
 
+### Manual-login mode (use this if the app has MFA/SSO)
+
 ```bash
-# Headless, full run (fills all ~60 cards, clicks Save Progress at the end)
+npm run dqr:manual
+```
+
+A visible Chromium window opens with a persistent profile. You do everything that involves judgment — sign in, complete MFA, navigate to **Data Quality Rating**. A big green **START AUTOMATION** button is injected at the bottom-right of every page. When you're on the DQR page and ready, click it — the automation takes over that tab and iterates every card.
+
+The session (cookies, localStorage) is cached in `.playwright-user-data/` so on future `npm run dqr:manual` runs you usually won't need to MFA again until your session expires. Delete that folder any time for a clean profile.
+
+### Automated-login mode (username + password only, no MFA)
+
+```bash
+# Headless, full run
 npm run dqr
 
 # Headed (visible browser) — easier to watch / debug
@@ -53,8 +65,9 @@ All flags can be passed after `--` to any npm script, e.g. `npm run dqr -- --onl
 
 | Flag | Effect |
 |------|--------|
+| `--manual` | Skip scripted login; open a persistent browser and wait for you to sign in (incl. MFA) and navigate to the DQR page. Automation auto-starts on detection. |
 | `--headed` | Show the browser window |
-| `--headless` | Force headless (the default) |
+| `--headless` | Force headless (the default; ignored with `--manual`) |
 | `--dry-run` | Open each panel and log what it would fill; make no actual changes; skip Save |
 | `--only "<name>"` | Run on a single card whose title equals `<name>` (case-insensitive) |
 | `--skip-save` | Fill every card but do NOT click Save Progress |

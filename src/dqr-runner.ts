@@ -24,6 +24,8 @@ export interface RunOptions {
   skipSave: boolean;
   artifactsDir: string;
   maxCardAttempts: number;
+  /** When true, assume the user has already navigated to the DQR page (manual mode). */
+  skipSidebarNav?: boolean;
 }
 
 export interface CardFailure {
@@ -43,7 +45,11 @@ export async function runDqr(page: Page, opts: RunOptions): Promise<RunSummary> 
   const started = Date.now();
   await fs.mkdir(opts.artifactsDir, { recursive: true });
 
-  await navigateToDqr(page);
+  if (!opts.skipSidebarNav) {
+    await navigateToDqr(page);
+  } else {
+    log.info('Skipping sidebar navigation (manual mode — assuming you are on the DQR page)');
+  }
   await expandAllCategories(page);
   await scrollListToLoadAll(page);
 
@@ -116,6 +122,113 @@ export async function runDqr(page: Page, opts: RunOptions): Promise<RunSummary> 
 }
 
 // ─── Navigation ─────────────────────────────────────────────────────────
+
+/**
+ * Manual-mode entry point: park the browser open and wait for the user to
+ * click the injected "START AUTOMATION" button. Returns the page where the
+ * button was clicked, so the caller knows which tab to drive.
+ *
+ * The button is injected into every page in the context (idempotent) and
+ * re-injected after navigations. When clicked, it calls the
+ * `context.exposeBinding` channel `__dqrStart`, resolving this promise.
+ */
+export async function waitForUserStart(page: Page, timeoutMs = 30 * 60_000): Promise<Page> {
+  const context = page.context();
+
+  log.banner('Ready — click the big GREEN "START AUTOMATION" button in the browser');
+  log.info('  1. Log in and navigate to Data Quality Rating yourself (browser is yours)');
+  log.info('  2. When you see all the DQR cards on screen, click the green button');
+  log.info('     (it floats at the bottom-right corner)');
+  log.info('  3. Automation clicks each card, fills every dropdown, closes, and saves');
+  log.info('  (Ctrl+C in this terminal to abort)');
+
+  let clickedPage: Page | null = null;
+  try {
+    await context.exposeBinding('__dqrStart', (source) => {
+      clickedPage = source.page;
+    });
+  } catch (e) {
+    // Binding already exists — fine, leftover from an earlier call.
+    log.debug(`exposeBinding: ${(e as Error).message}`);
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (!clickedPage && Date.now() < deadline) {
+    const pages = context.pages().filter((p) => !p.isClosed());
+    if (pages.length === 0) {
+      throw new Error('All browser windows closed before the START button was clicked.');
+    }
+    for (const p of pages) {
+      await installStartButton(p).catch(() => {});
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  if (!clickedPage) {
+    throw new Error(
+      `Timed out after ${Math.round(timeoutMs / 60_000)}min waiting for the START button.`,
+    );
+  }
+
+  const chosen: Page = clickedPage;
+  await chosen.bringToFront().catch(() => {});
+  await chosen.evaluate(() => document.getElementById('__dqr_start_btn')?.remove()).catch(() => {});
+  log.ok(`START clicked on ${chosen.url()} — running automation.`);
+  return chosen;
+}
+
+/**
+ * Idempotently inject the floating START button into a page. If the button
+ * is already present (same element id), this is a no-op.
+ */
+async function installStartButton(page: Page): Promise<void> {
+  if (page.isClosed()) return;
+  await page.evaluate(() => {
+    if (document.getElementById('__dqr_start_btn')) return;
+    if (!document.body) return;
+
+    const btn = document.createElement('button');
+    btn.id = '__dqr_start_btn';
+    btn.type = 'button';
+    btn.textContent = 'START AUTOMATION';
+
+    const base = '#16a34a';
+    const hover = '#15803d';
+    Object.assign(btn.style, {
+      position: 'fixed',
+      bottom: '24px',
+      right: '24px',
+      zIndex: '2147483647',
+      padding: '18px 32px',
+      background: base,
+      color: '#ffffff',
+      fontSize: '18px',
+      fontWeight: '700',
+      letterSpacing: '0.05em',
+      border: '3px solid #ffffff',
+      borderRadius: '12px',
+      cursor: 'pointer',
+      boxShadow: '0 10px 32px rgba(22, 163, 74, 0.55), 0 0 0 4px rgba(22, 163, 74, 0.25)',
+      fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif',
+    });
+    btn.addEventListener('mouseenter', () => {
+      btn.style.background = hover;
+    });
+    btn.addEventListener('mouseleave', () => {
+      btn.style.background = base;
+    });
+    btn.addEventListener('click', () => {
+      btn.textContent = 'STARTING...';
+      btn.style.background = '#6b7280';
+      btn.style.cursor = 'default';
+      (btn as HTMLButtonElement).disabled = true;
+      const fn = (window as unknown as Record<string, unknown>)['__dqrStart'];
+      if (typeof fn === 'function') (fn as () => void)();
+    });
+
+    document.body.appendChild(btn);
+  });
+}
 
 async function navigateToDqr(page: Page): Promise<void> {
   log.info('Opening Data Quality Rating section');

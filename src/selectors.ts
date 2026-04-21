@@ -102,8 +102,12 @@ export function sidebarNavItem(page: Page, text: RegExp): Array<{ name: string; 
 export function dataPointsHeading(page: Page): Array<{ name: string; loc: Locator }> {
   return [
     { name: 'role=heading name=/data points/i', loc: page.getByRole('heading', { name: /data points/i }) },
-    { name: 'text=/data points \\(\\d+ total\\)/i', loc: page.getByText(/data points\s*\(\d+\s*total\)/i) },
-    { name: 'text=/data points/i', loc: page.getByText(/^\s*data points\s*$/i) },
+    { name: 'text=/data points \\(N total\\)/i', loc: page.getByText(/data points\s*\(\s*\d+\s*total\s*\)/i) },
+    { name: 'text=/^data points$/i', loc: page.getByText(/^\s*data points\s*$/i) },
+    { name: 'h1-h6 hasText="Data Points"', loc: page.locator('h1, h2, h3, h4, h5, h6').filter({ hasText: /data points/i }) },
+    { name: 'text=/data points/i (any)', loc: page.getByText(/data points/i) },
+    { name: 'heading "Data Quality Assessment"', loc: page.getByRole('heading', { name: /data quality assessment/i }) },
+    { name: 'text="Data Quality Assessment"', loc: page.getByText(/data quality assessment/i) },
   ];
 }
 

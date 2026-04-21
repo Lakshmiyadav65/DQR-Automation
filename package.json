@@ -10,6 +10,7 @@
     "dqr": "tsx src/index.ts",
     "dqr:headed": "tsx src/index.ts --headed",
     "dqr:dry": "tsx src/index.ts --headed --dry-run",
+    "dqr:manual": "tsx src/index.ts --manual",
     "typecheck": "tsc --noEmit",
     "codegen": "playwright codegen"
   },
