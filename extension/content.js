@@ -148,9 +148,11 @@
         (failCount ? `, ${failCount} failed (see console).` : '.'),
     );
     if (failCount) {
-      console.group('DQR Automation failures');
-      summary.failed.forEach((f) => console.warn(`${f.card}: ${f.reason}`));
-      console.groupEnd();
+      // Use console.log (not console.warn / console.error) so these show up
+      // in DevTools but NOT in chrome://extensions → Errors, which doesn't
+      // auto-clear and makes old runs look like new problems.
+      console.log('[DQR] Failures this run:');
+      summary.failed.forEach((f) => console.log(`  • ${f.card}: ${f.reason}`));
     }
     const stopBtn = document.getElementById('__dqr_overlay_stop');
     if (stopBtn) {
