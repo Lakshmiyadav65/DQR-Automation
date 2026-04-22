@@ -248,17 +248,22 @@
     return (s || '').replace(/[\s ]+/g, ' ').trim();
   }
 
+  function stripCounterAndStatus(text) {
+    return (text || '')
+      .replace(/\d+\s*\/\s*5\s*DQIs?/gi, '')
+      .replace(/\b(Pending|Completed|In Progress|Done)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   function findCards() {
-    // Find the SMALLEST elements whose flattened text contains "N/5 DQIs".
-    // We scan element.textContent (not individual text nodes) so we don't
-    // care if "0/5" and "DQIs" are split into two sibling <span>s.
+    // Step 1: find leaves whose flattened text contains "N/5 DQIs" but no
+    // descendant's does. These are the smallest counter-bearing elements.
     const all = document.body ? document.body.querySelectorAll('*') : [];
     const leaves = [];
     for (const el of all) {
       const text = normalizeText(el.textContent);
       if (!/\d+\/5\s*DQIs/i.test(text)) continue;
-      // Keep only leaves — skip ancestors whose children also match, so we
-      // don't collect the entire DQR page as one giant "card".
       let hasMatchingChild = false;
       for (const child of el.children) {
         if (/\d+\/5\s*DQIs/i.test(normalizeText(child.textContent))) {
@@ -275,48 +280,44 @@
     const seen = new WeakSet();
 
     for (const leaf of leaves) {
-      // Walk UP from the counter leaf to the card container. The card is
-      // the nearest ancestor that still contains the counter, has a heading
-      // inside, and is either clickable or contains the status badge.
+      // Walk UP until the ancestor has substantial NON-counter/NON-status
+      // text (that's the card's title area). Prefer the first card-sized
+      // ancestor (height 40–400px, narrower than the full viewport).
       let el = leaf;
       let chosen = null;
 
-      for (let depth = 0; depth < 12; depth++) {
+      for (let depth = 0; depth < 15; depth++) {
         const parent = el.parentElement;
-        if (!parent || parent === document.body) break;
+        if (!parent || parent === document.body || parent === document.documentElement) break;
         el = parent;
         const text = normalizeText(el.textContent);
         if (!/\d+\/5\s*DQIs/i.test(text)) break; // walked past the card
+        const extra = stripCounterAndStatus(text);
+        if (extra.length < 3) continue; // still nothing but counter+badge
 
-        const s = getComputedStyle(el);
-        const isClickable =
-          s.cursor === 'pointer' ||
-          !!el.onclick ||
-          el.getAttribute('role') === 'button' ||
-          el.tagName === 'BUTTON' ||
-          (typeof el.tabIndex === 'number' && el.tabIndex >= 0);
-
-        const hasBadge = /(Pending|Completed|In Progress)/i.test(text);
-        const hasHeading = !!el.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
-
-        if (isClickable) {
-          chosen = el;
-          break; // strongest signal — stop climbing
-        }
-        if (hasBadge && hasHeading) {
-          chosen = el; // promising candidate — keep climbing in case there's a clickable wrapper
-        }
+        // We found an ancestor with extra text — it has at least the title.
+        chosen = el;
+        const rect = el.getBoundingClientRect();
+        const cardSized =
+          rect.width > 100 &&
+          rect.height > 40 &&
+          rect.height < 400 &&
+          rect.width < window.innerWidth * 0.85;
+        if (cardSized) break; // card-shaped: stop. Else keep climbing.
       }
 
       if (!chosen) {
-        // No clickable ancestor found — fall back to the leaf's 3rd-level parent.
-        chosen = leaf.parentElement?.parentElement?.parentElement ?? leaf;
+        console.log('[DQR] Could not find card container for leaf:', leaf);
+        continue;
       }
       if (seen.has(chosen)) continue;
       seen.add(chosen);
 
       const title = extractCardTitle(chosen);
-      if (!title) continue;
+      if (!title || /^\d+\s*\/\s*5/.test(title) || /^(Pending|Completed|In Progress|Done)$/i.test(title)) {
+        console.log(`[DQR] Skipping card with unusable title "${title}"`, chosen);
+        continue;
+      }
       cards.push({ element: chosen, title });
     }
 
@@ -327,14 +328,41 @@
   }
 
   function extractCardTitle(card) {
+    // 1) Explicit heading tag wins if present.
     const h = card.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
-    if (h && h.textContent && h.textContent.trim()) return h.textContent.trim();
+    if (h) {
+      const t = (h.textContent || '').trim();
+      if (t && !/^\d+\s*\/\s*5/.test(t)) return t;
+    }
+
+    // 2) Pick the leaf-text element with the LARGEST font-size — that's
+    //    almost always the title in a card design.
+    const candidates = [];
+    for (const el of card.querySelectorAll('*')) {
+      const hasDirectText = Array.from(el.childNodes).some(
+        (n) => n.nodeType === Node.TEXT_NODE && (n.nodeValue || '').trim() !== '',
+      );
+      if (!hasDirectText) continue;
+      const text = normalizeText(el.textContent);
+      if (!text) continue;
+      if (/^\d+\s*\/\s*5/i.test(text)) continue; // counter
+      if (/^(Pending|Completed|In Progress|Done)$/i.test(text)) continue; // badge
+      const fontSize = parseFloat(getComputedStyle(el).fontSize || '0');
+      if (!fontSize) continue;
+      candidates.push({ el, text, fontSize });
+    }
+    if (candidates.length) {
+      candidates.sort((a, b) => b.fontSize - a.fontSize);
+      return candidates[0].text;
+    }
+
+    // 3) Last resort: the first non-counter/non-badge line of textContent.
     const lines = (card.textContent || '')
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean)
-      .filter((l) => !/^\d+\/5\s*DQIs$/i.test(l))
-      .filter((l) => !/^(Pending|Completed|In Progress)$/i.test(l));
+      .filter((l) => !/^\d+\s*\/\s*5/i.test(l))
+      .filter((l) => !/^(Pending|Completed|In Progress|Done)$/i.test(l));
     return lines[0] || '';
   }
 
